@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OAuth2Client } from 'google-auth-library';
-import { SECTIONS, VISIBILITY, canView } from './public/js/sections.js';
+import { SECTIONS, VIS_OPTIONS, AUTO_LEVELS, ADMIN_LEVEL, MAX_LEVEL, canView, normVis } from './public/js/sections.js';
 import * as store from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,48 +54,77 @@ app.use('/api', (req, res, next) => {
 });
 
 // ---------- 권한 ----------
+// 방문자 level 0, 회원 level 1~7(저장된 등급), 관리자 level 8
+const GUEST = { role: 'guest', level: 0 };
 const isLocalhost = (req) => ['localhost', '127.0.0.1', '::1'].includes(req.hostname);
 
-function roleOf(req) {
+function viewer(req) {
   const u = req.session?.user;
-  if (!u) return 'guest';
-  if (u.dev) return DEV_LOGIN && isLocalhost(req) ? u.devRole : 'guest';
-  return ADMIN_EMAILS.includes(u.email.toLowerCase()) ? 'admin' : 'member';
+  if (!u) return GUEST;
+  if (u.dev && !(DEV_LOGIN && isLocalhost(req))) return GUEST;
+  const isAdmin = u.dev ? u.devRole === 'admin' : ADMIN_EMAILS.includes(u.email.toLowerCase());
+  if (isAdmin) return { ...u, role: 'admin', level: ADMIN_LEVEL };
+  const rec = store.getUser(u.sub);
+  if (!rec) return GUEST; // 데이터가 초기화된 경우 — 다시 로그인하면 1등급으로 가입
+  return { ...u, role: 'member', level: rec.level };
 }
 function requireAdmin(req, res, next) {
-  if (roleOf(req) !== 'admin') return res.status(403).json({ error: '관리자만 할 수 있어요' });
+  if (viewer(req).role !== 'admin') return res.status(403).json({ error: '관리자만 할 수 있어요' });
   next();
+}
+const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+
+// 다음 등급까지 필요한 조건
+function nextStep(rec) {
+  if (rec.level >= MAX_LEVEL) return null;
+  const level = rec.level + 1;
+  const r = store.getRules().levels[level];
+  if (AUTO_LEVELS.includes(level) && r?.auto) return { level, auto: true, visits: r.visits, posts: r.posts };
+  return { level, auto: false };
 }
 
 // ---------- 인증 API ----------
 app.get('/api/me', (req, res) => {
-  const role = roleOf(req);
-  const u = role === 'guest' ? null : req.session.user;
-  res.json({
-    user: u ? { name: u.name, email: u.email, picture: u.picture, role } : null,
-    googleClientId: GOOGLE_CLIENT_ID || null,
-    devLogin: DEV_LOGIN && isLocalhost(req),
-  });
+  const v = viewer(req);
+  let user = null;
+  if (v.role !== 'guest') {
+    user = { name: v.name, email: v.email, picture: v.picture, role: v.role, level: v.level };
+    const rec = store.getUser(v.sub);
+    if (rec) {
+      const { visitsPerDay, visitGapMinutes } = store.getRules();
+      Object.assign(user, {
+        visits: rec.visits, posts: store.postsOf(v.sub),
+        next: v.role === 'member' ? nextStep(rec) : null,
+        visitRule: { visitsPerDay, visitGapMinutes },
+      });
+    }
+  }
+  res.json({ user, googleClientId: GOOGLE_CLIENT_ID || null, devLogin: DEV_LOGIN && isLocalhost(req) });
 });
 
 app.post('/api/auth/google', async (req, res) => {
   if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: '구글 로그인이 설정되지 않았어요' });
+  let p;
   try {
     const ticket = await google.verifyIdToken({ idToken: String(req.body?.credential || ''), audience: GOOGLE_CLIENT_ID });
-    const p = ticket.getPayload();
-    if (!p?.email || !p.email_verified) return res.status(401).json({ error: '이메일 인증이 필요한 계정이에요' });
-    req.session.user = { sub: p.sub, email: p.email, name: p.name || p.email, picture: p.picture || '' };
-    res.json({ ok: true, role: roleOf(req) });
+    p = ticket.getPayload();
   } catch {
-    res.status(401).json({ error: '로그인 확인에 실패했어요' });
+    return res.status(401).json({ error: '로그인 확인에 실패했어요' });
   }
+  if (!p?.email || !p.email_verified) return res.status(401).json({ error: '이메일 인증이 필요한 계정이에요' });
+  const user = { sub: p.sub, email: p.email, name: p.name || p.email, picture: p.picture || '' };
+  await store.upsertUser(user);
+  req.session.user = user;
+  res.json({ ok: true, role: viewer(req).role });
 });
 
 // 로컬 개발용 가짜 로그인 (.env에 DEV_LOGIN=1, localhost에서만)
-app.post('/api/auth/dev', (req, res) => {
+app.post('/api/auth/dev', async (req, res) => {
   if (!DEV_LOGIN || !isLocalhost(req)) return res.status(404).end();
   const devRole = req.body?.role === 'admin' ? 'admin' : 'member';
-  req.session.user = { dev: true, devRole, email: `dev-${devRole}@localhost`, name: devRole === 'admin' ? '개발용 관리자' : '개발용 회원', picture: '' };
+  const user = { dev: true, devRole, sub: `dev-${devRole}`, email: `dev-${devRole}@localhost`, name: devRole === 'admin' ? '개발용 관리자' : '개발용 회원', picture: '' };
+  await store.upsertUser(user);
+  req.session.user = user;
   res.json({ ok: true, role: devRole });
 });
 
@@ -104,28 +133,50 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// 방문 기록(회원만) — 페이지를 열 때 한 번 호출
+app.post('/api/visit', async (req, res) => {
+  const v = viewer(req);
+  if (v.role !== 'member') return res.json({ counted: false, promotedTo: null });
+  res.json(await store.recordVisit(v.sub));
+});
+
 // ---------- 콘텐츠 API ----------
 app.get('/api/home', (req, res) => {
-  const role = roleOf(req);
+  const v = viewer(req);
+  const admin = v.role === 'admin';
   const db = store.getDb();
   const sections = [];
   for (const s of SECTIONS) {
     const visibility = store.visibilityOf(s.id);
-    const visible = canView(role, visibility);
-    if (!visible && visibility === 'private') continue; // 비공개는 존재 자체를 숨김
-    if (!visible) { sections.push({ id: s.id, visibility, locked: true }); continue; }
+    if (!canView(v.level, visibility)) {
+      if (visibility < ADMIN_LEVEL) sections.push({ id: s.id, visibility, locked: true }); // 비공개는 존재 자체를 숨김
+      continue;
+    }
     const data = db.sections[s.id] || {};
     const item = { id: s.id, visibility, locked: false, text: data.text || '', updatedAt: data.updatedAt || null };
     if (s.type === 'gallery') item.photos = db.gallery.map((p) => p.id);
+    if (s.type === 'list') {
+      const all = store.itemsOf(s.id).map((i) => ({ ...i, level: normVis(i.level) }));
+      item.items = all.filter((i) => canView(v.level, i.level));
+      item.hiddenCount = all.filter((i) => !canView(v.level, i.level) && i.level < ADMIN_LEVEL).length;
+    }
+    if (s.type === 'guestbook') {
+      item.canWrite = v.role !== 'guest';
+      item.entries = db.guestbook.slice(0, 200).map((e) => ({
+        id: e.id, name: e.name, picture: e.picture, text: e.text, createdAt: e.createdAt,
+        mine: e.sub === v.sub, canDelete: admin || e.sub === v.sub,
+      }));
+    }
     sections.push(item);
   }
   const open = sections.filter((s) => !s.locked);
   res.json({
-    role,
+    role: v.role,
+    level: v.level,
     profile: db.profile,
     stats: {
       photos: open.find((s) => s.id === 'gallery')?.photos?.length ?? 0,
-      notes: open.filter((s) => s.text?.trim()).length,
+      notes: open.filter((s) => s.text?.trim() || s.items?.length).length,
       days: Math.max(1, Math.ceil((Date.now() - db.createdAt) / 86400000)),
     },
     sections,
@@ -140,6 +191,7 @@ function decodeJpeg(dataUrl, maxBytes) {
   if (buf.length > maxBytes || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return null;
   return buf;
 }
+const validVis = (v) => (typeof v === 'number' || (typeof v === 'string' && /^\d$/.test(v))) && VIS_OPTIONS.includes(Number(v));
 
 app.put('/api/profile', requireAdmin, async (req, res) => {
   const { name, tagline, avatar } = req.body || {};
@@ -154,17 +206,35 @@ app.put('/api/profile', requireAdmin, async (req, res) => {
   res.json(await store.updateProfile(patch));
 });
 
+const sectionOf = (id) => SECTIONS.find((s) => s.id === id);
+
 app.put('/api/sections/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  if (!SECTIONS.some((s) => s.id === id)) return res.status(404).json({ error: '없는 공간이에요' });
+  if (!sectionOf(id)) return res.status(404).json({ error: '없는 공간이에요' });
   const { text, visibility } = req.body || {};
   const patch = {};
   if (typeof text === 'string') patch.text = text.slice(0, 50000);
   if (visibility !== undefined) {
-    if (!VISIBILITY[visibility]) return res.status(400).json({ error: '공개 범위가 올바르지 않아요' });
-    patch.visibility = visibility;
+    if (!validVis(visibility)) return res.status(400).json({ error: '공개 범위가 올바르지 않아요' });
+    patch.visibility = Number(visibility);
   }
   res.json(await store.updateSection(id, patch));
+});
+
+// 학력/이력 목록 전체 저장 — 항목마다 공개 등급
+app.put('/api/sections/:id/items', requireAdmin, async (req, res) => {
+  const s = sectionOf(req.params.id);
+  if (s?.type !== 'list') return res.status(404).json({ error: '목록형 공간이 아니에요' });
+  const raw = Array.isArray(req.body?.items) ? req.body.items.slice(0, 100) : null;
+  if (!raw) return res.status(400).json({ error: '항목 형식이 올바르지 않아요' });
+  const items = [];
+  for (const i of raw) {
+    const title = str(i?.title, 100);
+    if (!title) continue; // 제목이 빈 항목은 버린다
+    if (!validVis(i.level)) return res.status(400).json({ error: `'${title}'의 공개 등급이 올바르지 않아요` });
+    items.push({ id: str(i.id, 32), title, period: str(i.period, 50), detail: str(i.detail, 500), level: Number(i.level) });
+  }
+  res.json({ items: await store.setItems(s.id, items) });
 });
 
 app.post('/api/gallery', requireAdmin, async (req, res) => {
@@ -190,11 +260,71 @@ app.delete('/api/gallery/:id', requireAdmin, async (req, res) => {
 app.get('/api/photos/:id', (req, res) => {
   const { id } = req.params;
   if (!PHOTO_ID.test(id) || !store.getDb().gallery.some((p) => p.id === id)) return res.status(404).end();
-  if (!canView(roleOf(req), store.visibilityOf('gallery'))) return res.status(403).end();
+  if (!canView(viewer(req).level, store.visibilityOf('gallery'))) return res.status(403).end();
   const file = store.photoPath(id);
   if (!fs.existsSync(file)) return res.status(404).end();
   res.set('Cache-Control', 'private, max-age=86400');
   res.sendFile(file);
+});
+
+// ---------- 방명록 ----------
+app.post('/api/guestbook', async (req, res) => {
+  const v = viewer(req);
+  if (v.role === 'guest') return res.status(401).json({ error: '로그인 후 남길 수 있어요' });
+  if (!canView(v.level, store.visibilityOf('guestbook'))) return res.status(403).json({ error: '방명록을 볼 수 있는 등급이 아니에요' });
+  const text = str(req.body?.text, 500);
+  if (!text) return res.status(400).json({ error: '내용을 적어 주세요' });
+  const dayAgo = Date.now() - 86400000;
+  if (store.getDb().guestbook.filter((e) => e.sub === v.sub && e.createdAt > dayAgo).length >= 10) {
+    return res.status(429).json({ error: '하루에 10개까지 남길 수 있어요' });
+  }
+  const { promotedTo } = await store.addGuestbook({ sub: v.sub, name: v.name, picture: v.picture, text });
+  res.json({ ok: true, promotedTo });
+});
+
+app.delete('/api/guestbook/:id', async (req, res) => {
+  const v = viewer(req);
+  const e = store.getGuestbookEntry(String(req.params.id));
+  if (!e) return res.status(404).json({ error: '없는 글이에요' });
+  if (v.role !== 'admin' && e.sub !== v.sub) return res.status(403).json({ error: '내가 쓴 글만 지울 수 있어요' });
+  await store.removeGuestbook(e.id);
+  res.json({ ok: true });
+});
+
+// ---------- 관리자: 회원 / 등급 규칙 ----------
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  const users = store.listUsers().map((u) => ({
+    sub: u.sub, name: u.name, email: u.email, picture: u.picture, level: u.level, visits: u.visits,
+    posts: store.postsOf(u.sub), createdAt: u.createdAt, lastLoginAt: u.lastLoginAt, lastVisitAt: u.lastVisitAt,
+    isAdmin: u.sub === 'dev-admin' || ADMIN_EMAILS.includes(String(u.email).toLowerCase()),
+    history: (u.history || []).slice(-5),
+  })).sort((a, b) => (b.lastLoginAt || 0) - (a.lastLoginAt || 0));
+  res.json({ users });
+});
+
+app.put('/api/admin/users/:sub', requireAdmin, async (req, res) => {
+  const level = Number(req.body?.level);
+  if (!Number.isInteger(level) || level < 1 || level > MAX_LEVEL) return res.status(400).json({ error: '등급은 1~7 사이예요' });
+  const u = await store.setUserLevel(String(req.params.sub), level);
+  if (!u) return res.status(404).json({ error: '없는 회원이에요' });
+  res.json({ ok: true, level: u.level });
+});
+
+app.get('/api/admin/rules', requireAdmin, (req, res) => res.json(store.getRules()));
+
+app.put('/api/admin/rules', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const int = (v, min, max) => { const n = Number(v); return Number.isInteger(n) && n >= min && n <= max ? n : null; };
+  const rules = { visitsPerDay: int(b.visitsPerDay, 1, 20), visitGapMinutes: int(b.visitGapMinutes, 0, 1440), levels: {} };
+  if (rules.visitsPerDay === null || rules.visitGapMinutes === null) return res.status(400).json({ error: '방문 규칙 값이 올바르지 않아요' });
+  for (const lv of AUTO_LEVELS) {
+    const r = b.levels?.[lv] || {};
+    const visits = int(r.visits, 0, 100000);
+    const posts = int(r.posts, 0, 10000);
+    if (visits === null || posts === null) return res.status(400).json({ error: `${lv}등급 조건 값이 올바르지 않아요` });
+    rules.levels[lv] = { auto: Boolean(r.auto), visits, posts };
+  }
+  res.json(await store.setRules(rules));
 });
 
 // 배포 확인용 — Railway가 넣어 주는 커밋 번호로 지금 어떤 버전이 떠 있는지 알 수 있다
