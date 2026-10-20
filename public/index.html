@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mingoo Park</title>
+  <meta name="description" content="Mingoo Park's personal homepage" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="role-guest">
+  <!-- 배경: 흐릿한 파스텔 블롭 -->
+  <div class="bg" aria-hidden="true">
+    <span class="blob b1"></span>
+    <span class="blob b2"></span>
+    <span class="blob b3"></span>
+    <span class="blob b4"></span>
+  </div>
+
+  <!-- 상단 내비게이션 -->
+  <header class="nav glass">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true">M</span>
+      <span class="brand-name">Mingoo Park</span>
+    </a>
+    <label class="search glass-inset">
+      <svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="Search…  (예: 사진, 일기)" autocomplete="off" />
+    </label>
+    <div class="nav-actions">
+      <button class="icon-btn glass-inset admin-only" id="btnVisibility" title="공개 설정" aria-label="공개 설정">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>
+      </button>
+      <button class="icon-btn glass-inset admin-only" id="btnProfileEdit" title="프로필 편집" aria-label="프로필 편집">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>
+      </button>
+      <button class="btn btn-violet btn-sm guest-only" id="btnLogin">로그인</button>
+      <button class="nav-user user-only" id="btnAccount" aria-label="내 계정">
+        <img class="nav-avatar" id="navAvatar" alt="" />
+      </button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- 히어로: 프로필 카드 + 인사 패널 -->
+    <section class="hero">
+      <article class="profile glass" id="profileCard">
+        <div class="profile-top">
+          <button class="avatar-ring" id="avatarBtn" aria-label="프로필 사진 변경">
+            <img id="avatar" alt="프로필 사진" />
+          </button>
+          <div class="stats">
+            <div><strong id="statPhotos">0</strong><span>사진</span></div>
+            <div><strong id="statNotes">0</strong><span>기록</span></div>
+            <div><strong id="statDays">0</strong><span>일째</span></div>
+          </div>
+        </div>
+        <h1 id="profileName">Mingoo Park</h1>
+        <p class="tagline" id="profileTagline">한 줄 소개를 작성해 보세요</p>
+        <div class="profile-actions">
+          <button class="btn btn-violet" data-open="about">소개 보기</button>
+          <button class="btn btn-glass" data-open="contact">연락하기</button>
+        </div>
+      </article>
+
+      <article class="welcome glass">
+        <p class="eyebrow" id="today"></p>
+        <h2 class="greet"><span id="greeting">안녕하세요</span>,<br /><em id="greetName">Mingoo</em> 님의 공간입니다.</h2>
+        <p class="muted" id="welcomeText"></p>
+        <div class="quick">
+          <button class="chip glass-inset" data-open="gallery">
+            <span class="dot tone-mint"></span><span data-admin="사진 올리기">사진 보기</span>
+          </button>
+          <button class="chip glass-inset" data-open="journal">
+            <span class="dot tone-peach"></span><span data-admin="오늘의 기록">기록 보기</span>
+          </button>
+          <button class="chip glass-inset" data-open="schedule">
+            <span class="dot tone-sky"></span><span data-admin="일정 추가">일정 보기</span>
+          </button>
+        </div>
+      </article>
+    </section>
+
+    <!-- 메인 버튼 그리드 -->
+    <section aria-label="메뉴">
+      <div class="section-head">
+        <h3>My Spaces</h3>
+        <span class="muted small" id="spacesHint"></span>
+      </div>
+      <div class="tiles" id="tiles"></div>
+    </section>
+  </main>
+
+  <footer class="foot muted small">© <span id="year"></span> Mingoo Park · Liquid Glass</footer>
+
+  <!-- 편집 모달 -->
+  <dialog class="modal" id="modal">
+    <form method="dialog" class="modal-card glass" id="modalForm">
+      <header class="modal-head">
+        <span class="tile-icon" id="modalIcon"></span>
+        <div>
+          <h4 id="modalTitle"></h4>
+          <p class="muted small" id="modalDesc"></p>
+        </div>
+        <button class="icon-btn glass-inset" value="cancel" aria-label="닫기">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div class="modal-body" id="modalBody"></div>
+      <footer class="modal-foot" id="modalFoot"></footer>
+    </form>
+  </dialog>
+
+  <input type="file" id="fileInput" accept="image/*" multiple hidden />
+  <input type="file" id="avatarInput" accept="image/*" hidden />
+  <div class="toast glass" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://accounts.google.com/gsi/client" async></script>
+  <script src="/js/app.js" type="module"></script>
+</body>
+</html>
