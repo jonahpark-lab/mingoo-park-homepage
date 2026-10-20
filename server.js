@@ -12,7 +12,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4100; // Railway가 PORT를 주입한다. 로컬은 4100 고정(구글 로그인 허용 주소와 일치해야 함)
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-const DEV_LOGIN = process.env.DEV_LOGIN === '1';
+// 테스트 로그인은 로컬 전용 — Railway/production 환경에서는 값이 있어도 꺼진다
+const IS_DEPLOYED = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID) || process.env.NODE_ENV === 'production';
+const DEV_LOGIN = process.env.DEV_LOGIN === '1' && !IS_DEPLOYED;
+if (process.env.DEV_LOGIN === '1' && IS_DEPLOYED) console.warn('⚠️  배포 환경이라 DEV_LOGIN을 무시합니다. Variables에서 지워 주세요.');
 
 let SESSION_SECRET = process.env.SESSION_SECRET;
 if (!SESSION_SECRET) {
