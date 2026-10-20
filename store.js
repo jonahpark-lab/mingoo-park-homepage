@@ -1,12 +1,17 @@
 // 데이터 저장소 — 지금은 JSON 파일 + 사진 파일.
-// DATA_DIR 환경변수로 위치를 바꿀 수 있다(Railway에서는 Volume 경로를 지정).
+// 저장 위치: Railway Volume이 붙어 있으면 그 경로(RAILWAY_VOLUME_MOUNT_PATH, Railway가 자동 주입)를
+// 우선 사용하고, 없으면 DATA_DIR, 그것도 없으면 ./data.
 // 나중에 Postgres로 옮길 때 이 파일의 함수만 교체하면 된다.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SECTIONS } from './public/js/sections.js';
 
-const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
+const VOLUME = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+if (VOLUME && process.env.DATA_DIR && path.resolve(process.env.DATA_DIR) !== path.resolve(VOLUME)) {
+  console.warn(`⚠️  DATA_DIR(${process.env.DATA_DIR})가 Volume 경로(${VOLUME})와 달라 Volume 경로를 사용합니다.`);
+}
+const DATA_DIR = path.resolve(VOLUME || process.env.DATA_DIR || './data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
