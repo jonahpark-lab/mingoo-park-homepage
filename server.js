@@ -197,7 +197,12 @@ app.get('/api/photos/:id', (req, res) => {
   res.sendFile(file);
 });
 
-app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+// 배포 확인용 — Railway가 넣어 주는 커밋 번호로 지금 어떤 버전이 떠 있는지 알 수 있다
+app.get('/api/health', (req, res) => res.json({
+  ok: true,
+  time: new Date().toISOString(),
+  commit: (process.env.RAILWAY_GIT_COMMIT_SHA || 'local').slice(0, 7),
+}));
 
 app.use(express.static(path.join(__dirname, 'public')));
 
